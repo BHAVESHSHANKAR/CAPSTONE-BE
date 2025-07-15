@@ -455,4 +455,96 @@ router.post("/verify-key/:fileId", authenticateToken, async (req, res) => {
   }
 });
 
+// 📋 Get user's file history (both sent and received)
+router.get("/history/:walletAddress", authenticateToken, async (req, res) => {
+  try {
+    const walletAddress = req.params.walletAddress.trim();
+
+    // Find files where user is either sender or recipient
+    const files = await File.find({
+      $or: [
+        { sender: new RegExp(`^${walletAddress}$`, "i") },
+        { recipient: new RegExp(`^${walletAddress}$`, "i") }
+      ]
+    }).sort({ createdAt: -1 }); // Sort by newest first
+
+    if (!files.length) {
+      return res.status(200).json({
+        success: true,
+        message: "No file history found",
+        files: []
+      });
+    }
+
+    // Get unique wallet addresses for both senders and recipients
+    const walletAddresses = [...new Set([
+      ...files.map(file => file.sender),
+      ...files.map(file => file.recipient)
+    ])];
+
+    // Find all users' information
+    const users = await User.find({
+      walletAddress: { $in: walletAddresses }
+    });
+
+    // Create a map of wallet address to user info
+    const userMap = new Map(
+      users.map(user => [
+        user.walletAddress.toLowerCase(),
+        {
+          username: user.username,
+          walletAddress: user.walletAddress
+        }
+      ])
+    );
+
+    const formatted = files.map(file => {
+      // Get sender and recipient info
+      const senderInfo = userMap.get(file.sender.toLowerCase()) || {
+        username: 'Unknown User',
+        walletAddress: file.sender
+      };
+
+      const recipientInfo = userMap.get(file.recipient.toLowerCase()) || {
+        username: 'Unknown User',
+        walletAddress: file.recipient
+      };
+
+      // Determine if the current user is the sender or recipient
+      const isSender = file.sender.toLowerCase() === walletAddress.toLowerCase();
+
+      // Format file name
+      let displayName = file.originalFileName || file.fileName.replace('.enc', '');
+
+      return {
+        id: file._id,
+        fileName: displayName,
+        type: isSender ? 'sent' : 'received',
+        sender: {
+          address: senderInfo.walletAddress,
+          username: senderInfo.username
+        },
+        recipient: {
+          address: recipientInfo.walletAddress,
+          username: recipientInfo.username
+        },
+        unlockTime: file.unlockTime,
+        createdAt: file.createdAt
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "File history retrieved successfully",
+      files: formatted
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve file history",
+      error: err.message
+    });
+  }
+});
+
 module.exports = router;
