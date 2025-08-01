@@ -3,12 +3,13 @@ const router = express.Router();
 const multer = require("multer");
 const cloudinary = require("../utils/cloudinary");
 const File = require("../models/File");
-const User = require("../models/User"); // Add User model import
+const User = require("../models/User");
 const crypto = require("crypto");
 const streamifier = require("streamifier");
 const dotenv = require("dotenv");
-const axios = require("axios"); // Add axios for better HTTP requests
+const axios = require("axios");
 const jwt = require("jsonwebtoken");
+const { transporter } = require("../utils/emailConfig");
 dotenv.config();
 
 // Authentication middleware
@@ -546,5 +547,85 @@ router.get("/history/:walletAddress", authenticateToken, async (req, res) => {
     });
   }
 });
+
+// 📧 Send email notification to recipient
+router.post("/notify", authenticateToken, async (req, res) => {
+  try {
+    const { recipient, fileName, aesKey, txHash, unlockTime, sender } = req.body;
+
+    // Find recipient user to get their email
+    const recipientUser = await User.findOne({ walletAddress: recipient });
+    if (!recipientUser || !recipientUser.email) {
+      return res.status(404).json({
+        success: false,
+        message: "Recipient email not found"
+      });
+    }
+
+    // Verify email configuration
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      console.error('Email configuration missing');
+      return res.status(500).json({
+        success: false,
+        message: "Email service not configured properly"
+      });
+    }
+
+    // Email template
+    const emailContent = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #2563eb;">New Secure File Shared With You</h2>
+        
+        <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+          <p><strong>From:</strong> ${sender}</p>
+          <p><strong>File Name:</strong> ${fileName}</p>
+          <p><strong>Unlock Time:</strong> ${unlockTime}</p>
+        </div>
+
+        <div style="background-color: #fff7ed; padding: 20px; border-radius: 8px; border: 1px solid #fed7aa; margin: 20px 0;">
+          <h3 style="color: #9a3412; margin-top: 0;">Decryption Key</h3>
+          <p style="font-family: monospace; background-color: #fff; padding: 10px; border-radius: 4px; word-break: break-all;">
+            ${aesKey}
+          </p>
+          <p style="color: #9a3412; font-size: 14px;">⚠️ Save this key! You'll need it to decrypt the file.</p>
+        </div>
+
+        <div style="background-color: #f0f9ff; padding: 20px; border-radius: 8px; border: 1px solid #bae6fd; margin: 20px 0;">
+          <h3 style="color: #0369a1; margin-top: 0;">Blockchain Transaction</h3>
+          <p style="font-family: monospace; background-color: #fff; padding: 10px; border-radius: 4px; word-break: break-all;">
+            ${txHash}
+          </p>
+        </div>
+
+        <p style="color: #4b5563; font-size: 14px;">
+          You can access this file through your dashboard once the unlock time is reached.
+          Keep the decryption key safe until you're ready to download the file.
+        </p>
+      </div>
+    `;
+
+    // Send email
+    await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: recipientUser.email,
+      subject: `Secure File Shared: ${fileName}`,
+      html: emailContent
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Email notification sent successfully"
+    });
+
+  } catch (err) {
+    console.error('Email notification error:', err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to send email notification",
+      error: err.message
+    });
+  }
+});
+
 
 module.exports = router;

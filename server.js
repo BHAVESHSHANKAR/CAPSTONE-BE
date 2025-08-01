@@ -4,6 +4,7 @@ const dotenv = require("dotenv");
 const cors = require("cors");
 const authRoutes = require("./routes/authRoutes");
 const fileRoutes = require("./routes/fileRoutes");
+const { verifyEmailConfig } = require("./utils/emailConfig");
 dotenv.config();
 
 const app = express();
@@ -79,8 +80,15 @@ mongoose
     useNewUrlParser: true,
     useUnifiedTopology: true,
   })
-  .then(() => {
+  .then(async () => {
     console.log("✅ MongoDB connected");
+    
+    // Verify email configuration
+    const emailConfigured = await verifyEmailConfig();
+    if (!emailConfigured) {
+      console.warn("⚠️ Email service not configured properly. Email notifications will not work.");
+    }
+
     app.listen(PORT, () => console.log(`🚀 Server running at http://localhost:${PORT}`));
   })
   .catch((err) => {

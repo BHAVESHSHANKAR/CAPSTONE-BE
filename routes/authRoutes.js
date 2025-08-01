@@ -5,6 +5,22 @@ const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
 const dotenv=require("dotenv");
 dotenv.config();
+
+// Device type middleware
+const checkDeviceType = (req, res, next) => {
+  const userAgent = req.headers['user-agent'].toLowerCase();
+  const isMobile = /mobile|iphone|ipad|android|blackberry|windows\s+phone/i.test(userAgent);
+  const isTablet = /(tablet|ipad|playbook|silk)|(android(?!.*mobile))/i.test(userAgent);
+  
+  if (isMobile || isTablet) {
+    return res.status(403).json({
+      message: "Access denied. For security purposes, the dashboard is only accessible from desktop or laptop computers.",
+      type: "DEVICE_RESTRICTION",
+      isRestrictedDevice: true
+    });
+  }
+  next();
+};
 // Email transporter setup
 const transporter = nodemailer.createTransport({
   service: 'gmail',
@@ -43,19 +59,94 @@ router.post("/register", async (req, res) => {
   const { username, email, password, walletAddress } = req.body;
 
   try {
-    // Check for existing user
-    const existingUser = await User.findOne({ $or: [{ email }, { walletAddress }] });
-    if (existingUser) {
-      return res.status(400).json({ message: "User with this email or wallet address already exists" });
+    // Validate input format
+    if (!username || !email || !password || !walletAddress) {
+      return res.status(400).json({
+        message: "All fields are required",
+        type: "VALIDATION_ERROR",
+        details: {
+          username: !username ? "Username is required" : null,
+          email: !email ? "Email is required" : null,
+          password: !password ? "Password is required" : null,
+          walletAddress: !walletAddress ? "Wallet address is required" : null
+        }
+      });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        message: "Please enter a valid email address",
+        type: "VALIDATION_ERROR",
+        field: "email"
+      });
+    }
+
+    // Validate username length
+    if (username.length < 3) {
+      return res.status(400).json({
+        message: "Username must be at least 3 characters long",
+        type: "VALIDATION_ERROR",
+        field: "username"
+      });
+    }
+
+    // Validate password length
+    if (password.length < 6) {
+      return res.status(400).json({
+        message: "Password must be at least 6 characters long",
+        type: "VALIDATION_ERROR",
+        field: "password"
+      });
+    }
+
+    // Validate wallet address format
+    const walletRegex = /^0x[a-fA-F0-9]{40}$/;
+    if (!walletRegex.test(walletAddress)) {
+      return res.status(400).json({
+        message: "Please enter a valid Ethereum wallet address (0x...)",
+        type: "VALIDATION_ERROR",
+        field: "walletAddress"
+      });
+    }
+
+    // Check for existing email
+    const existingEmail = await User.findOne({ email });
+    if (existingEmail) {
+      return res.status(400).json({
+        message: "This email address is already registered. Please use a different email or try logging in.",
+        type: "DUPLICATE_ERROR",
+        field: "email"
+      });
+    }
+
+    // Check for existing wallet address (case-insensitive)
+    const existingWallet = await User.findOne({ 
+      walletAddress: { $regex: new RegExp(`^${walletAddress}$`, 'i') }
+    });
+    if (existingWallet) {
+      return res.status(400).json({
+        message: "This wallet address is already registered. Please use a different wallet address.",
+        type: "DUPLICATE_ERROR",
+        field: "walletAddress"
+      });
     }
 
     // Create new user
-    const newUser = await User.create({ username, email, password, walletAddress });
+    const newUser = await User.create({
+      username: username.trim(),
+      email: email.toLowerCase().trim(),
+      password,
+      walletAddress: walletAddress.toLowerCase().trim()
+    });
 
     // Generate JWT
     const token = jwt.sign({ id: newUser._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
 
     res.status(201).json({
+      message: "Account created successfully!",
+      type: "SUCCESS",
       user: {
         _id: newUser._id,
         username: newUser.username,
@@ -69,28 +160,65 @@ router.post("/register", async (req, res) => {
       token,
     });
   } catch (err) {
-    res.status(500).json({ message: "Server error", error: err.message });
+    console.error('Registration error:', err);
+    res.status(500).json({
+      message: "An error occurred during registration. Please try again.",
+      type: "SERVER_ERROR",
+      error: err.message
+    });
   }
 });
-router.post("/login", async (req, res) => {
+router.post("/login", checkDeviceType, async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    // Validate input
-    if (!email || !password) {
-      return res.status(400).json({ message: "Email and password are required" });
+    // Validate input format
+    if (!email && !password) {
+      return res.status(400).json({ 
+        message: "Email and password are required",
+        type: "VALIDATION_ERROR"
+      });
+    }
+
+    if (!email) {
+      return res.status(400).json({ 
+        message: "Email is required",
+        type: "VALIDATION_ERROR"
+      });
+    }
+
+    if (!password) {
+      return res.status(400).json({ 
+        message: "Password is required",
+        type: "VALIDATION_ERROR"
+      });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ 
+        message: "Please enter a valid email address",
+        type: "VALIDATION_ERROR"
+      });
     }
 
     // Find user by email
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(401).json({ message: "Invalid email or password" });
+      return res.status(401).json({ 
+        message: "No account found with this email address",
+        type: "AUTH_ERROR"
+      });
     }
 
     // Check password
     const isMatch = await user.matchPassword(password);
     if (!isMatch) {
-      return res.status(401).json({ message: "Invalid email or password" });
+      return res.status(401).json({ 
+        message: "Incorrect password",
+        type: "AUTH_ERROR"
+      });
     }
 
     // Generate JWT
@@ -111,7 +239,12 @@ router.post("/login", async (req, res) => {
       token,
     });
   } catch (err) {
-    res.status(500).json({ message: "Server error", error: err.message });
+    console.error('Login error:', err);
+    res.status(500).json({ 
+      message: "An error occurred during login. Please try again.",
+      type: "SERVER_ERROR",
+      error: err.message 
+    });
   }
 });
 router.get("/wallet/:walletAddress", async (req, res) => {
@@ -227,6 +360,48 @@ router.post("/hide-wallet", async (req, res) => {
     res.json({ message: "Wallet address hidden successfully", walletAddressVisible: false });
   } catch (err) {
     res.status(500).json({ message: "Failed to hide wallet address", error: err.message });
+  }
+});
+
+// Search users endpoint
+router.get("/search", async (req, res) => {
+  try {
+    const { query } = req.query;
+    if (!query) {
+      return res.status(400).json({
+        success: false,
+        message: "Search query is required"
+      });
+    }
+
+    // Search by username or wallet address (case-insensitive)
+    const users = await User.find({
+      $or: [
+        { username: { $regex: query, $options: 'i' } },
+        { walletAddress: { $regex: query, $options: 'i' } }
+      ]
+    })
+    .select('username walletAddress walletAddressVisible')
+    .limit(5);
+
+    // Format response to handle wallet address visibility
+    const formattedUsers = users.map(user => ({
+      username: user.username,
+      walletAddress: user.walletAddressVisible ? user.walletAddress : 
+        `${user.walletAddress.slice(0, 6)}...${user.walletAddress.slice(-4)}`,
+      walletAddressVisible: user.walletAddressVisible
+    }));
+
+    res.json({
+      success: true,
+      users: formattedUsers
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to search users",
+      error: err.message
+    });
   }
 });
 
