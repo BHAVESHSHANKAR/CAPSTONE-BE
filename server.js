@@ -58,6 +58,7 @@ app.use((err, req, res, next) => {
     });
   }
   
+  
   if (err.name === 'ForbiddenError') {
     return res.status(403).json({
       success: false,
