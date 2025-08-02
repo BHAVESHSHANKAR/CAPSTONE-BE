@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 5050;
 
 // Configure CORS with specific options
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://127.0.0.1:5173'], // Allow both localhost and IP
+  origin: process.env.FRONTEND_URL, // Allow both localhost and IP
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   exposedHeaders: ['Content-Disposition', 'Content-Length'],

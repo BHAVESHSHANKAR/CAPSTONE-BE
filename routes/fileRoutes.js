@@ -627,5 +627,129 @@ router.post("/notify", authenticateToken, async (req, res) => {
   }
 });
 
+// 🗑️ Delete file (recipient only)
+router.delete("/delete/:fileId", authenticateToken, async (req, res) => {
+  try {
+    const { fileId } = req.params;
+
+    // Validate input
+    if (!fileId) {
+      return res.status(400).json({
+        success: false,
+        message: "File ID is required"
+      });
+    }
+
+    // Find the file
+    const fileDoc = await File.findById(fileId);
+    if (!fileDoc) {
+      return res.status(404).json({
+        success: false,
+        message: "File not found"
+      });
+    }
+
+    // Check if user is authorized to delete (must be recipient)
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    // Case-insensitive comparison of wallet addresses
+    if (fileDoc.recipient.toLowerCase() !== user.walletAddress.toLowerCase()) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to delete this file. Only the recipient can delete it.",
+        details: {
+          recipient: fileDoc.recipient,
+          yourAddress: user.walletAddress
+        }
+      });
+    }
+
+    try {
+      // Delete from Cloudinary
+      if (fileDoc.fileUrl) {
+        // Extract public_id from Cloudinary URL
+        const urlParts = fileDoc.fileUrl.split('/');
+        const publicIdWithExtension = urlParts[urlParts.length - 1];
+        const publicId = `user_uploads/${publicIdWithExtension}`;
+        
+        try {
+          await cloudinary.uploader.destroy(publicId, { resource_type: 'raw' });
+          console.log(`Successfully deleted file from Cloudinary: ${publicId}`);
+        } catch (cloudinaryError) {
+          console.error('Cloudinary deletion error:', cloudinaryError);
+          // Continue with database deletion even if Cloudinary fails
+        }
+      }
+
+      // Delete from MongoDB
+      await File.findByIdAndDelete(fileId);
+
+      // Update user counters
+      const recipientUser = await User.findOne({ walletAddress: fileDoc.recipient });
+      if (recipientUser && recipientUser.filesReceived > 0) {
+        recipientUser.filesReceived -= 1;
+        await recipientUser.save();
+      }
+
+      const senderUser = await User.findOne({ walletAddress: fileDoc.sender });
+      if (senderUser && senderUser.filesShared > 0) {
+        senderUser.filesShared -= 1;
+        await senderUser.save();
+      }
+
+      res.status(200).json({
+        success: true,
+        message: "File deleted successfully from all storage locations",
+        deletedFile: {
+          id: fileDoc._id,
+          fileName: fileDoc.originalFileName || fileDoc.fileName,
+          sender: fileDoc.sender,
+          recipient: fileDoc.recipient
+        }
+      });
+
+    } catch (deletionError) {
+      console.error('File deletion error:', deletionError);
+      res.status(500).json({
+        success: false,
+        message: "Failed to delete file from storage",
+        error: deletionError.message
+      });
+    }
+
+  } catch (err) {
+    console.error('Delete file error:', err);
+    
+    // Handle specific error types
+    if (err.name === 'CastError') {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid file ID format",
+        error: err.message
+      });
+    }
+    
+    if (err.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication token has expired",
+        error: err.message
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "File deletion failed",
+      error: err.message
+    });
+  }
+});
+
 
 module.exports = router;
