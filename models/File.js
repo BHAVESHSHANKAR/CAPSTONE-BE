@@ -23,10 +23,17 @@ const fileSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  aesKeyHash: {
+  encryptionAlgorithm: {
+    type: String,
+    required: true,
+    enum: ['AES', 'DES'],
+    default: 'AES'
+  },
+  keyHash: {
     type: String,
     required: true
   },
+
   unlockTime: {
     type: Date,
     required: true
